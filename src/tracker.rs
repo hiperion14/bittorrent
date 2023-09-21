@@ -89,7 +89,7 @@ fn on_socket(buf: &[u8], socket: &UdpSocket, tracker: &String, torrent: &Torrent
 
 pub fn get_peers(torrent: &Torrent) -> Announce {
     let socket = UdpSocket::bind("0.0.0.0:34254").unwrap();
-    let addr = parse_udp(torrent.torrent["announce-list"][3][0].get_string().unwrap());
+    let addr = parse_udp(torrent.torrent["announce-list"][0][0].get_string().unwrap());
     let _ = socket.send_to(&build_conn_req().to_vec(), &addr).unwrap();
 
     let mut buf = [0; 2048];

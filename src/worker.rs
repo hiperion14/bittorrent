@@ -69,8 +69,9 @@ pub fn work(peers: Vec<([u8; 4], u16)>, torrent: &Arc<Torrent>) {
         println!("Completed {:.2}%", completed as f64 / torrent.num_pieces as f64 * 100.0);
 
         files.write_to_file(torrent, j.piece_index, j.data);
-        
+
         if completed == torrent.num_pieces {
+            println!("Finished");
             for _handle in handles.iter() {
                 work_queue.push(Piece::terminate_piece());
             }

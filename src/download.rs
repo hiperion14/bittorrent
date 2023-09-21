@@ -148,7 +148,7 @@ fn unchoke_handler(socket: &mut TcpStream, status: &mut Status, torrent: &Arc<To
 }
 
 fn have_handler() {
-    todo!();
+    //todo!();
 }
 
 fn bitfield_handler(status: &mut Status, bitfield_message: &BitfieldMessage) -> bool {
@@ -194,7 +194,6 @@ fn piece_handler(socket: &mut TcpStream, status: &mut Status, torrent: &Arc<Torr
 fn request_piece(socket: &mut TcpStream, status: &mut Status, torrent: &Arc<Torrent>) {
     if status.choked {return};
     if status.piece.is_none() {
-        
         return;
     }
     while !status.piece.as_ref().unwrap().is_done(){
