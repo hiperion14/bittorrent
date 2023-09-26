@@ -29,10 +29,6 @@ impl Piece {
         }
     }
 
-    pub fn terminate_piece() -> Self {
-        Self { piece_index: 0, blocks: None, blocks_requested: Vec::new(), length: 0, completed: 0, requested: 0 }
-    }
-
     pub fn get_needed(&mut self, torrent: &Torrent) -> Option<usize> {
         //println!("bpp: {}", torrent.blocks_per_piece(self.piece_index));
         if self.blocks.is_none() {

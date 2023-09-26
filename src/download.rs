@@ -5,8 +5,9 @@ use std::time::Instant;
 use crate::{message::{build_interested, parse, build_handshake, BitfieldMessage, PieceMessage}, torrent_parser::Torrent, worker::WorkQueue, piece::{Piece, PieceWrite}};
 
 pub struct Status {
-    worker: Arc<WorkQueue<Piece>>,
+    worker: Arc<WorkQueue>,
     piece: Option<Piece>,
+    frequency: Option<usize>,
     choked: bool,
     last_piece: Instant,
     bitfield: Vec<bool>,
@@ -14,26 +15,27 @@ pub struct Status {
 }
 
 impl Status {
-    pub fn new(worker: Arc<WorkQueue<Piece>>, sender: Sender<PieceWrite>) -> Self {
+    pub fn new(worker: Arc<WorkQueue>, sender: Sender<PieceWrite>) -> Self {
         Status {
             worker,
             choked: false,
             bitfield: Vec::new(),
             piece: None,
+            frequency: None,
             last_piece: Instant::now(),
             sender: sender,
         }
     } 
 }
 
-pub fn exit_socket(socket: &mut TcpStream, status: &mut Status, torrent: &Arc<Torrent>) {
-    exit(status, torrent);
+pub fn exit_socket(socket: &mut TcpStream, status: &mut Status) {
+    exit(status);
     socket.shutdown(Shutdown::Both).unwrap();
 }
 
-pub fn exit(status: &mut Status, torrent: &Arc<Torrent>) {
+pub fn exit(status: &mut Status) {
     if status.piece.is_some() {
-        status.worker.push(Piece::new(status.piece.as_ref().unwrap().piece_index, torrent))
+        status.worker.push(status.piece.as_ref().unwrap().piece_index as usize, status.frequency.unwrap())
     }
 }
 
@@ -51,7 +53,7 @@ fn on_socket(msg: &[u8], socket: &mut TcpStream, status: &mut Status, torrent: &
             0 => choke_handler(status),
             1 => unchoke_handler(socket, status, torrent),
             4 => have_handler(),
-            5 => return bitfield_handler(status, &m.bitfield_message.unwrap()),
+            5 => return bitfield_handler(status, &m.bitfield_message.unwrap(), torrent),
             7 => return piece_handler(socket, status, torrent, &m.piece_message.unwrap()),
             _ => return true,
         }
@@ -79,7 +81,7 @@ pub fn connect(peer: ([u8; 4], u16), status: &mut Status, torrent: &Arc<Torrent>
     let mut socket = match TcpStream::connect(SocketAddr::from(peer.to_owned())) {
         Ok(s) => s,
         Err(_) => {
-            return exit(status, torrent);
+            return exit(status);
         }
     };
 
@@ -93,10 +95,10 @@ pub fn connect(peer: ([u8; 4], u16), status: &mut Status, torrent: &Arc<Torrent>
     
     loop {
         let stream_result = match socket.read(&mut temp_buffer) {
-            Ok(n) if n == 0 => return exit_socket(&mut socket, status, torrent),
+            Ok(n) if n == 0 => return exit_socket(&mut socket, status),
             Ok(n) => n,
             Err(_) => {
-                return exit_socket(&mut socket, status, torrent);
+                return exit_socket(&mut socket, status);
             }
         };
         let size: i32 = stream_result.try_into().unwrap();
@@ -107,12 +109,12 @@ pub fn connect(peer: ([u8; 4], u16), status: &mut Status, torrent: &Arc<Torrent>
         while current_size > 0 {
             
             if status.last_piece.elapsed().as_secs() > 10 {
-                return exit_socket(&mut socket, status, torrent);
+                return exit_socket(&mut socket, status);
             }
 
             let packet_size = get_packet_size(&buffer);
             if packet_size.is_none() {
-                return exit_socket(&mut socket, status, torrent);
+                return exit_socket(&mut socket, status);
             }
             let packet_size = packet_size.unwrap();
 
@@ -122,7 +124,7 @@ pub fn connect(peer: ([u8; 4], u16), status: &mut Status, torrent: &Arc<Torrent>
             }
 
             if !on_socket(&buffer[0..packet_size], &mut socket, status, &torrent) { 
-                return exit_socket(&mut socket, status, torrent);
+                return exit_socket(&mut socket, status);
             };
             
             buffer.drain(0..packet_size);
@@ -151,20 +153,31 @@ fn have_handler() {
     //todo!();
 }
 
-fn bitfield_handler(status: &mut Status, bitfield_message: &BitfieldMessage) -> bool {
-    status.bitfield = Vec::with_capacity(bitfield_message.bitfield.len());
-    for b in bitfield_message.bitfield.iter() {
-        status.bitfield.push(*b);
+fn add_piece(status: &mut Status, torrent: &Arc<Torrent>) -> bool {
+    if let Some((piece, freq)) = status.worker.pop(&is_available, &status.bitfield) {
+        status.piece = Some(Piece::new(piece as i32, torrent));
+        status.frequency = Some(freq);
+        return true
     }
-    status.piece = status.worker.pop(&is_available, &status.bitfield);
-    if status.piece.as_ref().unwrap().length == 0 {
-        return false
-    }
-    true
+
+    return false
 }
 
-fn is_available(piece: &Piece, bitfield: &Vec<bool>) -> bool {
-    return bitfield[piece.piece_index as usize];
+fn bitfield_handler(status: &mut Status, bitfield_message: &BitfieldMessage, torrent: &Arc<Torrent>) -> bool {
+    status.bitfield = Vec::with_capacity(bitfield_message.bitfield.len());
+    for (i, b) in bitfield_message.bitfield.iter().enumerate() {
+        if *b {
+            status.worker.push(i, 1);
+        }
+        status.bitfield.push(*b);
+    }
+    
+    return add_piece(status, torrent);
+    
+}
+
+fn is_available(piece: usize, bitfield: &Vec<bool>) -> bool {
+    return bitfield[piece];
 }
 
 fn piece_handler(socket: &mut TcpStream, status: &mut Status, torrent: &Arc<Torrent>, piece_resp: &PieceMessage) -> bool {
@@ -177,15 +190,14 @@ fn piece_handler(socket: &mut TcpStream, status: &mut Status, torrent: &Arc<Torr
         };
         status.sender.send(piece_write).unwrap();
 
-        status.piece = status.worker.pop(&is_available, &status.bitfield);
-
-        if status.piece.as_ref().unwrap().length == 0 {
-            return false;
+        if !add_piece(status, torrent) {
+            return false
         }
 
         status.last_piece = Instant::now();
-        
         request_piece(socket, status, torrent);
+
+        
     }
     true
     
