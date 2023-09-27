@@ -22,6 +22,11 @@ pub struct Announce {
     pub peers: Vec<([u8; 4], u16)>
 }
 
+pub struct Tracker {
+    pub announce: Announce,
+    pub url: String,
+}
+
 impl Announce {
     pub fn from_buff(buf: &[u8], num_bytes: usize) -> Announce {
         let mut peers: Vec<([u8; 4], u16)> = vec![];
@@ -40,7 +45,7 @@ impl Announce {
             interval: u32::from_be_bytes(buf[8..12].try_into().unwrap()),
             leechers: u32::from_be_bytes(buf[12..16].try_into().unwrap()),
             seeders: u32::from_be_bytes(buf[16..20].try_into().unwrap()),
-            peers: peers
+            peers
         }
 
     }
@@ -82,24 +87,36 @@ fn on_socket(buf: &[u8], socket: &UdpSocket, tracker: &String, torrent: &Torrent
         RespTypes::Connect => {
             let resp = Resp::from_buff(buf);
             let _ = socket.send_to(&build_announce_req(resp.connection_id, torrent, 6881), tracker);
-            return None
+            None
         }
     }
 }
 
-pub fn get_peers(torrent: &Torrent) -> Announce {
-    let socket = UdpSocket::bind("0.0.0.0:34254").unwrap();
-    let addr = parse_udp(torrent.torrent["announce-list"][0][0].get_string().unwrap());
-    let _ = socket.send_to(&build_conn_req().to_vec(), &addr).unwrap();
+pub fn get_peers(torrent: &Torrent, addr: String) -> Option<Tracker> {
+    let socket = match UdpSocket::bind("0.0.0.0:34254") {
+        Ok(n) => n,
+        Err(_) => return None 
+    };
+    if !addr.starts_with("udp") {
+        return None
+    }
+    let addr = parse_udp(addr);
+    match socket.send_to(&build_conn_req(), &addr) {
+        Ok(_) => {},
+        Err(_) => return None
+    };
 
     let mut buf = [0; 2048];
     loop {
         // Receive data into the buffer
         let (num_bytes, _src_addr) = socket.recv_from(&mut buf).unwrap();
 
-        let result = on_socket(&buf, &socket, &addr, &torrent, num_bytes);
-        if result.is_some() {
-            return result.unwrap();
+        let result = on_socket(&buf, &socket, &addr, torrent, num_bytes);
+        if let Some(announce) = result {
+            return Some(Tracker {
+                announce,
+                url: addr.to_string(),
+            })
         }
     }
 
@@ -111,7 +128,7 @@ fn build_conn_req() -> BytesMut {
     buffer.put_u64(0x41727101980);
     buffer.put_u32(0);
     buffer.put_u32(rng.gen::<u32>());
-    return buffer;
+    buffer
 }
 
 fn build_announce_req(conn_id: u64, torrent: &Torrent, port: u16) -> BytesMut {
@@ -121,7 +138,7 @@ fn build_announce_req(conn_id: u64, torrent: &Torrent, port: u16) -> BytesMut {
     buf.put_u32(1);
     buf.put_u32(rng.gen::<u32>());
 
-    buf.put_slice(&torrent.info_hash().as_slice());
+    buf.put_slice(torrent.info_hash().as_slice());
 
     //peer-id
     buf.put_slice(b"-AT0001-");
@@ -141,7 +158,7 @@ fn build_announce_req(conn_id: u64, torrent: &Torrent, port: u16) -> BytesMut {
     buf.put_u16(port);
     
 
-    return buf;
+    buf
 }
 
 fn parse_udp(udp: String) -> String {
@@ -149,5 +166,5 @@ fn parse_udp(udp: String) -> String {
     let host = url.host_str().unwrap();
     let port = url.port().unwrap().to_string();
     let addr = format!("{}:{}", host, port);
-    return addr;
+    addr
 }

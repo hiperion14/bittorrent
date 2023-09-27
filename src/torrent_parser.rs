@@ -15,7 +15,7 @@ pub struct Torrent {
 impl Torrent {
     pub fn new(torrent: &Bee) -> Torrent {
         Torrent {
-            size: size(torrent).try_into().unwrap(),
+            size: size(torrent),
             piece_len: torrent["info"]["piece length"].get_int().unwrap().try_into().unwrap(),
             num_pieces: torrent["info"]["pieces"].get_raw().unwrap().len()/20,
             torrent: torrent.to_owned()
@@ -28,7 +28,7 @@ impl Torrent {
         let mut hasher = Sha1::new();
         hasher.update(&self.torrent["info"].get_decoded());
         let result: Vec<u8> = hasher.finalize().to_vec();
-        return result;
+        result
     }
     pub fn piece_len(&self, piece_index: i32) -> i32 {
         let total_len = self.size;
@@ -36,20 +36,20 @@ impl Torrent {
         let last_piece_length: i32 = (total_len % piece_len).try_into().unwrap();
         let last_piece_index = total_len/piece_len;
     
-        return if last_piece_index == piece_index.try_into().unwrap() {last_piece_length} else {piece_len.try_into().unwrap()}
+        if last_piece_index == piece_index.try_into().unwrap() {last_piece_length} else {piece_len.try_into().unwrap()}
     
     }
     
     pub fn blocks_per_piece(&self, piece_index: i32) -> i32 {
         let piece_length = self.piece_len(piece_index);
-        return piece_length / 16384;
+        piece_length / 16384
     }
     
     pub fn block_len(&self, piece_index: i32, block_index: i32) -> i32 {
         let piece_length = self.piece_len(piece_index);
         let last_piece_length = piece_length % 16384;
         let last_piece_index = piece_length / 16384;
-        return if block_index == last_piece_index.try_into().unwrap() {last_piece_length} else {16384}
+        if block_index == last_piece_index {last_piece_length} else {16384}
     }
 }
 
@@ -62,6 +62,6 @@ pub fn size(torrent: &Bee) -> i128 {
     }
     let binding = dict.get("files").unwrap().get_list().unwrap();
     let test = binding.iter().map(|a| a["length"].get_int().unwrap()).reduce(|a, b| a + b).unwrap();
-    return test
+    test
 }
 

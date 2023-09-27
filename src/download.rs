@@ -11,11 +11,11 @@ pub struct Status {
     choked: bool,
     last_piece: Instant,
     bitfield: Vec<bool>,
-    sender: Sender<PieceWrite>,
+    sender: Arc<Sender<PieceWrite>>,
 }
 
 impl Status {
-    pub fn new(worker: Arc<WorkQueue>, sender: Sender<PieceWrite>) -> Self {
+    pub fn new(worker: Arc<WorkQueue>, sender: Arc<Sender<PieceWrite>>) -> Self {
         Status {
             worker,
             choked: false,
@@ -23,7 +23,7 @@ impl Status {
             piece: None,
             frequency: None,
             last_piece: Instant::now(),
-            sender: sender,
+            sender,
         }
     } 
 }
@@ -42,7 +42,7 @@ pub fn exit(status: &mut Status) {
 fn on_socket(msg: &[u8], socket: &mut TcpStream, status: &mut Status, torrent: &Arc<Torrent>) -> bool {
     if is_handshake(msg) {
         let _ = socket.write_all(&build_interested());
-        return true;
+        true
     } else {
         let m = parse(msg);
         if m.is_none() {
@@ -57,7 +57,7 @@ fn on_socket(msg: &[u8], socket: &mut TcpStream, status: &mut Status, torrent: &
             7 => return piece_handler(socket, status, torrent, &m.piece_message.unwrap()),
             _ => return true,
         }
-        return true
+        true
     }
 }
 
@@ -67,13 +67,13 @@ pub fn get_packet_size(packet: &[u8]) -> Option<usize> {
     }
     if packet[1] == 0x42 && packet[2] == 0x69 {
         let packet_size: usize = (packet[0]+49).try_into().unwrap();
-        return Some(packet_size)
+        Some(packet_size)
     } else {
         if packet.len() < 4 {
             return None;
         } 
         let packet_size: usize = (u32::from_be_bytes(packet[0..4].try_into().unwrap())+4).try_into().unwrap();
-        return Some(packet_size)
+        Some(packet_size)
     }
 }
 
@@ -89,7 +89,7 @@ pub fn connect(peer: ([u8; 4], u16), status: &mut Status, torrent: &Arc<Torrent>
     let mut temp_buffer: [u8; 65536] = [0; 65536];
     let mut current_size: i32 = 0;
 
-    socket.write_all(&build_handshake(&torrent)).unwrap();
+    socket.write_all(&build_handshake(torrent)).unwrap();
     status.last_piece = Instant::now();
 
     
@@ -123,7 +123,7 @@ pub fn connect(peer: ([u8; 4], u16), status: &mut Status, torrent: &Arc<Torrent>
                 break;
             }
 
-            if !on_socket(&buffer[0..packet_size], &mut socket, status, &torrent) { 
+            if !on_socket(&buffer[0..packet_size], &mut socket, status, torrent) { 
                 return exit_socket(&mut socket, status);
             };
             
@@ -135,7 +135,7 @@ pub fn connect(peer: ([u8; 4], u16), status: &mut Status, torrent: &Arc<Torrent>
 }
 
 fn is_handshake(msg: &[u8]) -> bool {
-    return msg.len() == (u8::from_be_bytes(msg[0..1].try_into().unwrap())+49).into() 
+    msg.len() == (u8::from_be_bytes(msg[0..1].try_into().unwrap())+49).into() 
     && String::from_utf8(msg[1..20].try_into().unwrap()).unwrap() == "BitTorrent protocol"
 }
 
@@ -160,7 +160,7 @@ fn add_piece(status: &mut Status, torrent: &Arc<Torrent>) -> bool {
         return true
     }
 
-    return false
+    false
 }
 
 fn bitfield_handler(status: &mut Status, bitfield_message: &BitfieldMessage, torrent: &Arc<Torrent>) -> bool {
@@ -172,12 +172,11 @@ fn bitfield_handler(status: &mut Status, bitfield_message: &BitfieldMessage, tor
         status.bitfield.push(*b);
     }
     
-    return add_piece(status, torrent);
-    
+    add_piece(status, torrent)
 }
 
-fn is_available(piece: usize, bitfield: &Vec<bool>) -> bool {
-    return bitfield[piece];
+fn is_available(piece: usize, bitfield: &[bool]) -> bool {
+    bitfield[piece]
 }
 
 fn piece_handler(socket: &mut TcpStream, status: &mut Status, torrent: &Arc<Torrent>, piece_resp: &PieceMessage) -> bool {
@@ -185,7 +184,7 @@ fn piece_handler(socket: &mut TcpStream, status: &mut Status, torrent: &Arc<Torr
     
     if completed {
         let piece_write = PieceWrite {
-            data: status.piece.as_ref().unwrap().blocks.as_ref().unwrap().into_iter().map(|a| a.clone()).flatten().collect(),
+            data: status.piece.as_ref().unwrap().blocks.as_ref().unwrap().iter().flat_map(|a| a.clone()).collect(),
             piece_index: status.piece.as_ref().unwrap().piece_index as usize,
         };
         status.sender.send(piece_write).unwrap();
@@ -209,7 +208,7 @@ fn request_piece(socket: &mut TcpStream, status: &mut Status, torrent: &Arc<Torr
         return;
     }
     while !status.piece.as_ref().unwrap().is_done(){
-        let stop = status.piece.as_mut().unwrap().request(socket, &torrent);
+        let stop = status.piece.as_mut().unwrap().request(socket, torrent);
         if stop {
             return
             

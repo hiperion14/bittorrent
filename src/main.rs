@@ -8,11 +8,11 @@ mod file;
 mod message;
 mod worker;
 mod piece;
+mod peers;
 use bencode::Bee;
 use bencode::BeeValue;
+use peers::Download;
 use torrent_parser::Torrent;
-use tracker::get_peers;
-use worker::work;
 
 
 fn read_torrent(path: &String) -> Bee {
@@ -22,7 +22,7 @@ fn read_torrent(path: &String) -> Bee {
         Err(error) => panic!("Error on opening the torrent file: {:?}", error),
     };
     
-    return BeeValue::from_bytes(&torrent);
+    BeeValue::from_bytes(&torrent)
 }
 
 
@@ -30,7 +30,7 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     let path = &args[1];
     let torrent = Arc::new(Torrent::new(&read_torrent(path)));
-    let peers = get_peers(&torrent);
+    let download = Download::new(&torrent);
 
-    work(peers.peers, &torrent);
+    download.connect();
 }

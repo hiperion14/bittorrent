@@ -15,41 +15,41 @@ pub fn build_handshake(torrent: &Torrent) -> BytesMut {
     buf.put_slice(b"-AT0001-");
     buf.put_u64(rng.gen::<u64>());
     buf.put_u32(rng.gen::<u32>());
-    return buf;
+    buf
 }
 
 pub fn build_keep_alive() -> BytesMut {
     let mut buf = BytesMut::with_capacity(4);
     buf.put_u32(0);
-    return buf;
+    buf
 }
 
 pub fn build_choke() -> BytesMut {
     let mut buf = BytesMut::with_capacity(5);
     buf.put_u32(1);
     buf.put_u8(0);
-    return buf;
+    buf
 }
 
 pub fn build_unchoke() -> BytesMut {
     let mut buf = BytesMut::with_capacity(5);
     buf.put_u32(1);
     buf.put_u8(1);
-    return buf;
+    buf
 }
 
 pub fn build_interested() -> BytesMut {
     let mut buf = BytesMut::with_capacity(5);
     buf.put_u32(1);
     buf.put_u8(2);
-    return buf;
+    buf
 }
 
 pub fn build_uninterested() -> BytesMut {
     let mut buf = BytesMut::with_capacity(5);
     buf.put_u32(1);
     buf.put_u8(3);
-    return buf;
+    buf
 }
 
 pub fn build_have(piece_index: u32) -> BytesMut {
@@ -60,7 +60,7 @@ pub fn build_have(piece_index: u32) -> BytesMut {
     buf.put_u8(4);
     //piece index
     buf.put_u32(piece_index);
-    return buf;
+    buf
 }
 
 pub fn build_bitfield(bitfield: &[u8]) -> BytesMut {
@@ -71,7 +71,7 @@ pub fn build_bitfield(bitfield: &[u8]) -> BytesMut {
     buf.put_u8(5);
     //bitifield bits
     buf.put_slice(bitfield);
-    return buf
+    buf
 }
 
 pub fn build_request(piece_index: i32, block_index: i32, block_length: u32) -> BytesMut {
@@ -84,7 +84,7 @@ pub fn build_request(piece_index: i32, block_index: i32, block_length: u32) -> B
     buf.put_i32(piece_index);
     buf.put_i32(block_index);
     buf.put_u32(block_length);
-    return buf
+    buf
 }
 
 pub fn build_piece(piece_index: i32, block_index: i32, block: Vec<u8>) -> BytesMut {
@@ -97,7 +97,7 @@ pub fn build_piece(piece_index: i32, block_index: i32, block: Vec<u8>) -> BytesM
     buf.put_i32(piece_index);
     buf.put_i32(block_index);
     buf.put_slice(&block);
-    return buf;
+    buf
 }
 
 pub fn build_cancel(piece_index: i32, block_index: i32, block_length: i32) -> BytesMut {
@@ -110,7 +110,7 @@ pub fn build_cancel(piece_index: i32, block_index: i32, block_length: i32) -> By
     buf.put_i32(piece_index);
     buf.put_i32(block_index);
     buf.put_i32(block_length);
-    return buf
+    buf
 }
 
 pub fn build_port(port: u16) -> BytesMut {
@@ -121,7 +121,7 @@ pub fn build_port(port: u16) -> BytesMut {
     buf.put_u8(9);
     //listen_port
     buf.put_u16(port);
-    return buf
+    buf
 }
 
 
@@ -189,5 +189,5 @@ pub fn parse(msg: &[u8]) -> Option<Message> {
         })
     }
 
-    return Some(message);
+    Some(message)
 }

@@ -23,7 +23,7 @@ impl Piece {
             length: torrent.blocks_per_piece(piece_index) as usize,
             completed: 0,
             requested: 0,
-            piece_index: piece_index,
+            piece_index,
             blocks: None,
             blocks_requested: vec![false; torrent.blocks_per_piece(piece_index) as usize]
         }
@@ -46,11 +46,11 @@ impl Piece {
     pub fn add_block(&mut self, index: usize, data: Vec<u8>) -> bool {
         self.blocks.as_mut().unwrap()[index] = data;
         self.completed += 1;
-        return self.completed == self.length;
+        self.completed == self.length
     }
 
     pub fn is_done(&self) -> bool {
-        return self.requested == self.length;
+        self.requested == self.length
     }
 
     pub fn request(&mut self, socket: &mut TcpStream, torrent: &Torrent) -> bool {

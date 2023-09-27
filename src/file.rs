@@ -26,7 +26,7 @@ impl TorrentFiles {
             files.push(FileInfo { 
                 offset: constant_size,
                 path: file["path"][0].get_string().unwrap(),
-                size: size
+                size
             });
             constant_size += size;
 
