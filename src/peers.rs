@@ -35,6 +35,7 @@ impl Download {
             tracker_handles.push(thread::spawn(move || {
                 if let Some(peers) = get_peers(&torrent, addr) {
                     let mut peer_handles = vec![];
+                    println!("Connected to tracker");
                     for peer in peers.announce.peers {
                         if peers_mutex.lock().unwrap().insert(peer) {
                             let torrent = torrent.clone();
@@ -71,7 +72,7 @@ impl Download {
     
             if completed == self.torrent.num_pieces {
                 println!("Finished");
-                for _ in 0..self.torrent.num_pieces {
+                for _ in 0..10 {
                     self.work_queue.push_terminate();
                 }
             }
