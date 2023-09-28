@@ -53,7 +53,6 @@ async fn on_socket(msg: &[u8], socket: &mut TcpStream, status: &mut Peer, torren
         match m.id {
             0 => choke_handler(status),
             1 => unchoke_handler(socket, status, torrent).await,
-            4 => have_handler(),
             5 => return bitfield_handler(status, &m.bitfield_message.unwrap(), torrent),
             7 => return piece_handler(socket, status, torrent, &m.piece_message.unwrap()).await,
             _ => return true,
@@ -148,10 +147,6 @@ async fn unchoke_handler(socket: &mut TcpStream, status: &mut Peer, torrent: &Ar
     status.choked = false;
     request_piece(socket, status, torrent).await;
     
-}
-
-fn have_handler() {
-    //todo!();
 }
 
 fn add_piece(status: &mut Peer, torrent: &Arc<Torrent>) -> bool {
