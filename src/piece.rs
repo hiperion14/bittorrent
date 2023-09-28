@@ -1,4 +1,4 @@
-use std::{net::TcpStream, io::Write};
+use tokio::{net::TcpStream, io::AsyncWriteExt};
 
 use crate::{torrent_parser::Torrent, message::build_request};
 
@@ -53,13 +53,13 @@ impl Piece {
         self.requested == self.length
     }
 
-    pub fn request(&mut self, socket: &mut TcpStream, torrent: &Torrent) -> bool {
+    pub async fn request(&mut self, socket: &mut TcpStream, torrent: &Torrent) -> bool {
         if let Some(block_index) = self.get_needed(torrent) {
             let _ = socket.write_all(&build_request(
                 self.piece_index, 
                 (block_index * 16384).try_into().unwrap(),
                 torrent.block_len(self.piece_index, block_index.try_into().unwrap()).try_into().unwrap(),
-            ));
+            )).await;
             self.requested += 1;
             self.blocks_requested[block_index] = true;
             return false;

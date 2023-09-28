@@ -1,22 +1,24 @@
-use std::{net::{SocketAddr, TcpStream, Shutdown}, io::{Read, Write}, sync::{Arc, mpsc::Sender}};
+use std::{net::SocketAddr, sync::Arc};
+use tokio::sync::mpsc::Sender;
 
 use std::time::Instant;
+use tokio::{net::TcpStream, io::{AsyncWriteExt, AsyncReadExt}};
 
-use crate::{message::{build_interested, parse, build_handshake, BitfieldMessage, PieceMessage}, torrent_parser::Torrent, worker::WorkQueue, piece::{Piece, PieceWrite}};
+use crate::{message::{build_interested, parse, build_handshake, BitfieldMessage, PieceMessage}, torrent_parser::Torrent, worker::PieceQueue, piece::{Piece, PieceWrite}, Address};
 
-pub struct Status {
-    worker: Arc<WorkQueue>,
+pub struct Peer {
+    worker: Arc<PieceQueue>,
     piece: Option<Piece>,
     frequency: Option<usize>,
     choked: bool,
     last_piece: Instant,
     bitfield: Vec<bool>,
-    sender: Arc<Sender<PieceWrite>>,
+    sender: Sender<PieceWrite>,
 }
 
-impl Status {
-    pub fn new(worker: Arc<WorkQueue>, sender: Arc<Sender<PieceWrite>>) -> Self {
-        Status {
+impl Peer {
+    pub fn new(worker: Arc<PieceQueue>, sender: Sender<PieceWrite>) -> Self {
+        Peer {
             worker,
             choked: false,
             bitfield: Vec::new(),
@@ -28,20 +30,20 @@ impl Status {
     } 
 }
 
-pub fn exit_socket(socket: &mut TcpStream, status: &mut Status) {
+pub fn exit_socket(socket: &mut TcpStream, status: &mut Peer) {
     exit(status);
-    socket.shutdown(Shutdown::Both).unwrap();
+    let _ = socket.shutdown();
 }
 
-pub fn exit(status: &mut Status) {
+pub fn exit(status: &mut Peer) {
     if status.piece.is_some() {
         status.worker.push(status.piece.as_ref().unwrap().piece_index as usize, status.frequency.unwrap())
     }
 }
 
-fn on_socket(msg: &[u8], socket: &mut TcpStream, status: &mut Status, torrent: &Arc<Torrent>) -> bool {
+async fn on_socket(msg: &[u8], socket: &mut TcpStream, status: &mut Peer, torrent: &Arc<Torrent>) -> bool {
     if is_handshake(msg) {
-        let _ = socket.write_all(&build_interested());
+        let _ = socket.write_all(&build_interested()).await;
         true
     } else {
         let m = parse(msg);
@@ -51,10 +53,10 @@ fn on_socket(msg: &[u8], socket: &mut TcpStream, status: &mut Status, torrent: &
         let m = m.unwrap();
         match m.id {
             0 => choke_handler(status),
-            1 => unchoke_handler(socket, status, torrent),
+            1 => unchoke_handler(socket, status, torrent).await,
             4 => have_handler(),
             5 => return bitfield_handler(status, &m.bitfield_message.unwrap(), torrent),
-            7 => return piece_handler(socket, status, torrent, &m.piece_message.unwrap()),
+            7 => return piece_handler(socket, status, torrent, &m.piece_message.unwrap()).await,
             _ => return true,
         }
         true
@@ -77,8 +79,8 @@ pub fn get_packet_size(packet: &[u8]) -> Option<usize> {
     }
 }
 
-pub fn connect(peer: ([u8; 4], u16), status: &mut Status, torrent: &Arc<Torrent>) {
-    let mut socket = match TcpStream::connect(SocketAddr::from(peer.to_owned())) {
+pub async fn connect(peer: Address, status: &mut Peer, torrent: &Arc<Torrent>) {
+    let mut socket = match TcpStream::connect(SocketAddr::from(peer.to_owned())).await {
         Ok(s) => s,
         Err(_) => {
             return exit(status);
@@ -89,12 +91,12 @@ pub fn connect(peer: ([u8; 4], u16), status: &mut Status, torrent: &Arc<Torrent>
     let mut temp_buffer: [u8; 65536] = [0; 65536];
     let mut current_size: i32 = 0;
 
-    socket.write_all(&build_handshake(torrent)).unwrap();
+    socket.write_all(&build_handshake(torrent)).await.unwrap();
     status.last_piece = Instant::now();
 
     
     loop {
-        let stream_result = match socket.read(&mut temp_buffer) {
+        let stream_result = match socket.read(&mut temp_buffer).await {
             Ok(n) if n == 0 => return exit_socket(&mut socket, status),
             Ok(n) => n,
             Err(_) => {
@@ -123,7 +125,7 @@ pub fn connect(peer: ([u8; 4], u16), status: &mut Status, torrent: &Arc<Torrent>
                 break;
             }
 
-            if !on_socket(&buffer[0..packet_size], &mut socket, status, torrent) { 
+            if !on_socket(&buffer[0..packet_size], &mut socket, status, torrent).await { 
                 return exit_socket(&mut socket, status);
             };
             
@@ -139,13 +141,13 @@ fn is_handshake(msg: &[u8]) -> bool {
     && String::from_utf8(msg[1..20].try_into().unwrap()).unwrap() == "BitTorrent protocol"
 }
 
-fn choke_handler(status: &mut Status) {
+fn choke_handler(status: &mut Peer) {
     status.choked = true;
 }
 
-fn unchoke_handler(socket: &mut TcpStream, status: &mut Status, torrent: &Arc<Torrent>) {
+async fn unchoke_handler(socket: &mut TcpStream, status: &mut Peer, torrent: &Arc<Torrent>) {
     status.choked = false;
-    request_piece(socket, status, torrent);
+    request_piece(socket, status, torrent).await;
     
 }
 
@@ -153,7 +155,7 @@ fn have_handler() {
     //todo!();
 }
 
-fn add_piece(status: &mut Status, torrent: &Arc<Torrent>) -> bool {
+fn add_piece(status: &mut Peer, torrent: &Arc<Torrent>) -> bool {
     if let Some((piece, freq)) = status.worker.pop(&is_available, &status.bitfield) {
         status.piece = Some(Piece::new(piece as i32, torrent));
         status.frequency = Some(freq);
@@ -163,7 +165,7 @@ fn add_piece(status: &mut Status, torrent: &Arc<Torrent>) -> bool {
     false
 }
 
-fn bitfield_handler(status: &mut Status, bitfield_message: &BitfieldMessage, torrent: &Arc<Torrent>) -> bool {
+fn bitfield_handler(status: &mut Peer, bitfield_message: &BitfieldMessage, torrent: &Arc<Torrent>) -> bool {
     status.bitfield = Vec::with_capacity(bitfield_message.bitfield.len());
     for (i, b) in bitfield_message.bitfield.iter().enumerate() {
         if *b {
@@ -179,7 +181,7 @@ fn is_available(piece: usize, bitfield: &[bool]) -> bool {
     bitfield[piece]
 }
 
-fn piece_handler(socket: &mut TcpStream, status: &mut Status, torrent: &Arc<Torrent>, piece_resp: &PieceMessage) -> bool {
+async fn piece_handler(socket: &mut TcpStream, status: &mut Peer, torrent: &Arc<Torrent>, piece_resp: &PieceMessage) -> bool {
     let completed = status.piece.as_mut().unwrap().add_block((piece_resp.block_begin/16384) as usize, piece_resp.block.clone());
     
     if completed {
@@ -187,14 +189,20 @@ fn piece_handler(socket: &mut TcpStream, status: &mut Status, torrent: &Arc<Torr
             data: status.piece.as_ref().unwrap().blocks.as_ref().unwrap().iter().flat_map(|a| a.clone()).collect(),
             piece_index: status.piece.as_ref().unwrap().piece_index as usize,
         };
-        status.sender.send(piece_write).unwrap();
+        if status.sender.send(piece_write).await.is_err() {
+            return false
+        }
 
         if !add_piece(status, torrent) {
             return false
         }
 
         status.last_piece = Instant::now();
-        request_piece(socket, status, torrent);
+
+        if !status.choked {
+            request_piece(socket, status, torrent).await;
+        }
+        
 
         
     }
@@ -202,13 +210,13 @@ fn piece_handler(socket: &mut TcpStream, status: &mut Status, torrent: &Arc<Torr
     
 }
 
-fn request_piece(socket: &mut TcpStream, status: &mut Status, torrent: &Arc<Torrent>) {
+async fn request_piece(socket: &mut TcpStream, status: &mut Peer, torrent: &Arc<Torrent>) {
     if status.choked {return};
     if status.piece.is_none() {
         return;
     }
     while !status.piece.as_ref().unwrap().is_done(){
-        let stop = status.piece.as_mut().unwrap().request(socket, torrent);
+        let stop = status.piece.as_mut().unwrap().request(socket, torrent).await;
         if stop {
             return
             

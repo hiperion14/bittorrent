@@ -1,8 +1,8 @@
-use std::net::UdpSocket;
 use bytes::{BytesMut, BufMut};
 use rand::{Rng, rngs::ThreadRng};
 use url::Url;
-use crate::torrent_parser::Torrent;
+use crate::{torrent_parser::Torrent, Address};
+use tokio::net::UdpSocket;
 
 
 #[derive(Debug)]
@@ -19,7 +19,7 @@ pub struct Announce {
     pub interval: u32,
     pub leechers: u32,
     pub seeders: u32,
-    pub peers: Vec<([u8; 4], u16)>
+    pub peers: Vec<Address>
 }
 
 pub struct Tracker {
@@ -29,10 +29,10 @@ pub struct Tracker {
 
 impl Announce {
     pub fn from_buff(buf: &[u8], num_bytes: usize) -> Announce {
-        let mut peers: Vec<([u8; 4], u16)> = vec![];
+        let mut peers: Vec<Address> = vec![];
         for n in 0..(num_bytes-20)/6 {
             let ip: [u8; 4] = buf[n*6+20..n*6+24].try_into().unwrap();
-            let peer: ([u8; 4], u16) = (
+            let peer: Address = (
                 ip,
                 u16::from_be_bytes(buf[n*6+24..n*6+26].try_into().unwrap())
             );
@@ -78,7 +78,7 @@ impl RespTypes {
 
 
 
-fn on_socket(buf: &[u8], socket: &UdpSocket, tracker: &String, torrent: &Torrent, num_bytes: usize) -> Option<Announce> {
+async fn on_socket(buf: &[u8], socket: &UdpSocket, tracker: &String, torrent: &Torrent, num_bytes: usize) -> Option<Announce> {
     let action = RespTypes::from_u32(u32::from_be_bytes(buf[0..4].try_into().unwrap()));
     match action {
         RespTypes::Announce => {
@@ -86,32 +86,36 @@ fn on_socket(buf: &[u8], socket: &UdpSocket, tracker: &String, torrent: &Torrent
         },
         RespTypes::Connect => {
             let resp = Resp::from_buff(buf);
-            let _ = socket.send_to(&build_announce_req(resp.connection_id, torrent, 6881), tracker);
+            let _ = socket.send_to(&build_announce_req(resp.connection_id, torrent, 6881), tracker).await;
             None
         }
     }
 }
 
-pub fn get_peers(torrent: &Torrent, addr: String) -> Option<Tracker> {
-    let socket = match UdpSocket::bind("0.0.0.0:34254") {
+pub async fn get_peers(torrent: &Torrent, addr: String) -> Option<Tracker> {
+    let socket = match UdpSocket::bind("0.0.0.0:0").await {
         Ok(n) => n,
         Err(_) => return None 
     };
+
     if !addr.starts_with("udp") {
         return None
     }
     let addr = parse_udp(addr);
-    match socket.send_to(&build_conn_req(), &addr) {
+    match socket.send_to(&build_conn_req(), &addr).await {
         Ok(_) => {},
         Err(_) => return None
     };
-
+    
     let mut buf = [0; 2048];
     loop {
         // Receive data into the buffer
-        let (num_bytes, _src_addr) = socket.recv_from(&mut buf).unwrap();
+        let (num_bytes, _src_addr) = match socket.recv_from(&mut buf).await {
+            Ok(a) => a,
+            Err(_) => return None
+        };
 
-        let result = on_socket(&buf, &socket, &addr, torrent, num_bytes);
+        let result = on_socket(&buf, &socket, &addr, torrent, num_bytes).await;
         if let Some(announce) = result {
             return Some(Tracker {
                 announce,

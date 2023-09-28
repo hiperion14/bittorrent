@@ -14,6 +14,7 @@ use bencode::BeeValue;
 use peers::Download;
 use torrent_parser::Torrent;
 
+pub type Address = ([u8; 4], u16);
 
 fn read_torrent(path: &String) -> Bee {
     let torrent_result = fs::read(path);
@@ -26,11 +27,12 @@ fn read_torrent(path: &String) -> Bee {
 }
 
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let args: Vec<String> = env::args().collect();
     let path = &args[1];
     let torrent = Arc::new(Torrent::new(&read_torrent(path)));
-    let download = Download::new(&torrent);
+    let download = Download::new(&torrent).await;
 
-    download.connect();
+    download.connect().await;
 }
