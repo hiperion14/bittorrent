@@ -7,6 +7,7 @@ pub struct Torrent {
     pub piece_len: i32,
     pub num_pieces: usize,
     pub torrent: Bee,
+    pub hashes: Vec<Vec<u8>>
 }
 
 
@@ -18,7 +19,8 @@ impl Torrent {
             size: size(torrent),
             piece_len: torrent["info"]["piece length"].get_int().unwrap().try_into().unwrap(),
             num_pieces: torrent["info"]["pieces"].get_raw().unwrap().len()/20,
-            torrent: torrent.to_owned()
+            torrent: torrent.to_owned(),
+            hashes: torrent["info"]["pieces"].get_raw().unwrap().chunks(20).map(|a| a.to_vec()).collect()
         }
     }
 }

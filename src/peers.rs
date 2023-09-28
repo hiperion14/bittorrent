@@ -23,7 +23,6 @@ impl Download {
 
     pub async fn connect(&self) {
         let (result_sender, mut result_receiver) = channel::<PieceWrite>(self.torrent.num_pieces);
-        //let result_sender = Arc::new(result_sender);
         
         for tracker in &self.torrent.torrent["announce-list"].get_list().unwrap() {
             let addr = tracker[0].get_string().unwrap();

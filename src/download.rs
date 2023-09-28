@@ -1,9 +1,8 @@
 use std::{net::SocketAddr, sync::Arc};
+use sha1::{Sha1, Digest};
 use tokio::sync::mpsc::Sender;
-
 use std::time::Instant;
 use tokio::{net::TcpStream, io::{AsyncWriteExt, AsyncReadExt}};
-
 use crate::{message::{build_interested, parse, build_handshake, BitfieldMessage, PieceMessage}, torrent_parser::Torrent, worker::PieceQueue, piece::{Piece, PieceWrite}, Address};
 
 pub struct Peer {
@@ -181,6 +180,13 @@ fn is_available(piece: usize, bitfield: &[bool]) -> bool {
     bitfield[piece]
 }
 
+fn is_correct(piece: &PieceWrite, torrent: &Arc<Torrent>) -> bool {
+    let mut hasher = Sha1::new();
+    hasher.update(&piece.data);
+    let result: Vec<u8> = hasher.finalize().to_vec();
+    result == torrent.hashes[piece.piece_index]
+}
+
 async fn piece_handler(socket: &mut TcpStream, status: &mut Peer, torrent: &Arc<Torrent>, piece_resp: &PieceMessage) -> bool {
     let completed = status.piece.as_mut().unwrap().add_block((piece_resp.block_begin/16384) as usize, piece_resp.block.clone());
     
@@ -189,8 +195,13 @@ async fn piece_handler(socket: &mut TcpStream, status: &mut Peer, torrent: &Arc<
             data: status.piece.as_ref().unwrap().blocks.as_ref().unwrap().iter().flat_map(|a| a.clone()).collect(),
             piece_index: status.piece.as_ref().unwrap().piece_index as usize,
         };
-        if status.sender.send(piece_write).await.is_err() {
-            return false
+        
+        if is_correct(&piece_write, torrent) {
+            if status.sender.send(piece_write).await.is_err() {
+                return false
+            }
+        } else {
+            status.worker.push(status.piece.as_ref().unwrap().piece_index as usize, status.frequency.unwrap());
         }
 
         if !add_piece(status, torrent) {
