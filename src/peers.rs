@@ -23,14 +23,13 @@ impl Download {
 
     pub async fn connect(&self) {
         let (result_sender, mut result_receiver) = channel::<PieceWrite>(self.torrent.num_pieces);
-        
+
         for tracker in &self.torrent.torrent["announce-list"].get_list().unwrap() {
             let addr = tracker[0].get_string().unwrap();
             let torrent = self.torrent.clone();
             let peers_mutex = self.peers.clone();
             let result_sender = result_sender.clone();
             let work_queue = self.work_queue.clone();
-
 
             tokio::spawn(async move {
                 let tracker = match get_peers(&torrent, addr).await {
@@ -43,7 +42,6 @@ impl Download {
                         let torrent = torrent.clone();
                         let result_sender = result_sender.clone();
                         let work_queue = work_queue.clone();
-
 
                         tokio::spawn(async move {
                             let mut status = Peer::new(work_queue, result_sender);
@@ -60,6 +58,7 @@ impl Download {
 
         for _ in 0..self.torrent.num_pieces {
             let j = result_receiver.recv().await.unwrap();
+            self.work_queue.complete(j.piece_index);
             completed += 1;
     
             println!("Completed piece: {}. {:.2}%", j.piece_index, completed as f64 / self.torrent.num_pieces as f64 * 100.0);
@@ -68,7 +67,7 @@ impl Download {
     
             if completed == self.torrent.num_pieces {
                 println!("Finished");
-                self.work_queue.finish();
+                self.work_queue.close();
             }
         }
     }
