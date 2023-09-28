@@ -1,6 +1,6 @@
 use crate::torrent_parser::Torrent;
-use tokio::fs::{File, OpenOptions};
-use tokio::io::{AsyncWriteExt, AsyncSeekExt, SeekFrom};
+use std::fs::{File, OpenOptions};
+use std::io::{SeekFrom, Seek, Write};
 
 #[derive(Debug, Clone)]
 pub struct FileInfo {
@@ -28,9 +28,9 @@ impl TorrentFiles {
                 });
                 constant_size += size;
     
-                let mut file = File::create(file["path"][0].get_string().unwrap()).await.unwrap();
-                file.seek(SeekFrom::End(size as i64 - 1)).await.unwrap();
-                file.write_all(&[0]).await.unwrap();
+                let mut file = File::create(file["path"][0].get_string().unwrap()).unwrap();
+                file.seek(SeekFrom::End(size as i64 - 1)).unwrap();
+                file.write_all(&[0]).unwrap();
             }
         } else {
             let name = torrent.torrent["info"]["name"].get_string().unwrap();
@@ -46,7 +46,7 @@ impl TorrentFiles {
         }
     }
 
-    pub async fn write_to_file(&self, torrent: &Torrent, piece_index: usize, data: Vec<u8>) {
+    pub fn write_to_file(&self, torrent: &Torrent, piece_index: usize, data: Vec<u8>) {
         let piece_start_bytes = piece_index as i128 * torrent.piece_len as i128;
         let piece_finish_bytes = piece_start_bytes + torrent.piece_len as i128;
         for file_info in &self.files {
@@ -58,10 +58,10 @@ impl TorrentFiles {
                 let mut file = OpenOptions::new()
                     .write(true)
                     .create(true)
-                    .open(&file_info.path).await.unwrap();
+                    .open(&file_info.path).unwrap();
 
-                file.seek(SeekFrom::Start((data_start as i128 + piece_start_bytes - file_start_offset) as u64)).await.unwrap();
-                file.write_all(&data[data_start..data_end]).await.unwrap()
+                file.seek(SeekFrom::Start((data_start as i128 + piece_start_bytes - file_start_offset) as u64)).unwrap();
+                file.write_all(&data[data_start..data_end]).unwrap()
             }
         }
     }

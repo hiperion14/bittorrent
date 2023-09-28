@@ -63,7 +63,7 @@ impl Download {
     
             println!("Completed piece: {}. {:.2}%", j.piece_index, completed as f64 / self.torrent.num_pieces as f64 * 100.0);
     
-            self.files.write_to_file(&self.torrent, j.piece_index, j.data).await;
+            self.files.write_to_file(&self.torrent, j.piece_index, j.data);
     
             if completed == self.torrent.num_pieces {
                 println!("Finished");
