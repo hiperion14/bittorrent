@@ -1,7 +1,7 @@
 use std::{sync::{Arc, Mutex}, collections::HashSet};
-use tokio::sync::mpsc::channel;
+use tokio::sync::{mpsc::channel, broadcast};
 
-use crate::{worker::PieceQueue, tracker::get_peers, torrent_parser::Torrent, file::TorrentFiles, download::{connect, Peer}, piece::PieceWrite, Address};
+use crate::{worker::PieceQueue, tracker::get_peers, torrent_parser::Torrent, file::TorrentFiles, download::{connect, Peer, Status}, piece::PieceWrite, Address};
 
 
 pub struct Download {
@@ -23,6 +23,7 @@ impl Download {
 
     pub async fn connect(&self) {
         let (result_sender, mut result_receiver) = channel::<PieceWrite>(self.torrent.num_pieces);
+        let (tx, rx) = broadcast::channel::<Status>(10);
 
         for tracker in &self.torrent.torrent["announce-list"].get_list().unwrap() {
             let addr = tracker[0].get_string().unwrap();
@@ -30,7 +31,7 @@ impl Download {
             let peers_mutex = self.peers.clone();
             let result_sender = result_sender.clone();
             let work_queue = self.work_queue.clone();
-
+            let rx = rx.resubscribe();
             tokio::spawn(async move {
                 let tracker = match get_peers(&torrent, addr).await {
                     Some(a) => a,
@@ -42,9 +43,10 @@ impl Download {
                         let torrent = torrent.clone();
                         let result_sender = result_sender.clone();
                         let work_queue = work_queue.clone();
+                        let rx = rx.resubscribe();
 
                         tokio::spawn(async move {
-                            let mut status = Peer::new(work_queue, result_sender);
+                            let mut status = Peer::new(work_queue, result_sender, rx, Status::Leeching);
                             connect(peer, &mut status, &torrent).await
                         });
                     }
@@ -68,6 +70,7 @@ impl Download {
             if completed == self.torrent.num_pieces {
                 println!("Finished");
                 self.work_queue.close();
+                tx.send(Status::Closing).unwrap();
             }
         }
     }

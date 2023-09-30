@@ -1,9 +1,19 @@
 use std::{net::SocketAddr, sync::Arc};
 use sha1::{Sha1, Digest};
 use tokio::sync::mpsc::Sender;
+use tokio::sync::broadcast::Receiver;
 use std::time::Instant;
 use tokio::{net::TcpStream, io::{AsyncWriteExt, AsyncReadExt}};
 use crate::{message::{build_interested, parse, build_handshake, BitfieldMessage, PieceMessage}, torrent_parser::Torrent, worker::PieceQueue, piece::{Piece, PieceWrite}, Address};
+
+#[derive(Debug, Clone)]
+pub enum Status {
+    Closing,
+    Leeching,
+    Peering,
+    Seeding,
+    Halted
+}
 
 pub struct Peer {
     worker: Arc<PieceQueue>,
@@ -12,11 +22,13 @@ pub struct Peer {
     choked: bool,
     last_piece: Instant,
     bitfield: Vec<bool>,
-    sender: Sender<PieceWrite>,
+    piece_sender: Sender<PieceWrite>,
+    status_receiver: Receiver<Status>,
+    status: Status
 }
 
 impl Peer {
-    pub fn new(worker: Arc<PieceQueue>, sender: Sender<PieceWrite>) -> Self {
+    pub fn new(worker: Arc<PieceQueue>, piece_sender: Sender<PieceWrite>, status_receiver: Receiver<Status>, status: Status) -> Self {
         Peer {
             worker,
             choked: false,
@@ -24,9 +36,11 @@ impl Peer {
             piece: None,
             frequency: None,
             last_piece: Instant::now(),
-            sender,
+            piece_sender,
+            status_receiver,
+            status
         }
-    } 
+    }
 }
 
 pub fn exit_socket(socket: &mut TcpStream, status: &mut Peer) {
@@ -34,13 +48,13 @@ pub fn exit_socket(socket: &mut TcpStream, status: &mut Peer) {
     let _ = socket.shutdown();
 }
 
-pub fn exit(status: &mut Peer) {
-    if status.piece.is_some() {
-        status.worker.push(status.piece.as_ref().unwrap().piece_index as usize, status.frequency.unwrap())
+pub fn exit(peer: &mut Peer) {
+    if peer.piece.is_some() {
+        peer.worker.push(peer.piece.as_ref().unwrap().piece_index as usize, peer.frequency.unwrap())
     }
 }
 
-async fn on_socket(msg: &[u8], socket: &mut TcpStream, status: &mut Peer, torrent: &Arc<Torrent>) -> bool {
+async fn on_socket(msg: &[u8], socket: &mut TcpStream, peer: &mut Peer, torrent: &Arc<Torrent>) -> bool {
     if is_handshake(msg) {
         let _ = socket.write_all(&build_interested()).await;
         true
@@ -51,10 +65,10 @@ async fn on_socket(msg: &[u8], socket: &mut TcpStream, status: &mut Peer, torren
         }
         let m = m.unwrap();
         match m.id {
-            0 => choke_handler(status),
-            1 => unchoke_handler(socket, status, torrent).await,
-            5 => return bitfield_handler(status, &m.bitfield_message.unwrap(), torrent),
-            7 => return piece_handler(socket, status, torrent, &m.piece_message.unwrap()).await,
+            0 => choke_handler(peer),
+            1 => unchoke_handler(socket, peer, torrent).await,
+            5 => return bitfield_handler(peer, &m.bitfield_message.unwrap(), torrent),
+            7 => return piece_handler(socket, peer, torrent, &m.piece_message.unwrap()).await,
             _ => return true,
         }
         true
@@ -77,11 +91,11 @@ pub fn get_packet_size(packet: &[u8]) -> Option<usize> {
     }
 }
 
-pub async fn connect(peer: Address, status: &mut Peer, torrent: &Arc<Torrent>) {
-    let mut socket = match TcpStream::connect(SocketAddr::from(peer.to_owned())).await {
+pub async fn connect(peer_addr: Address, peer: &mut Peer, torrent: &Arc<Torrent>) {
+    let mut socket = match TcpStream::connect(SocketAddr::from(peer_addr.to_owned())).await {
         Ok(s) => s,
         Err(_) => {
-            return exit(status);
+            return exit(peer);
         }
     };
 
@@ -90,47 +104,60 @@ pub async fn connect(peer: Address, status: &mut Peer, torrent: &Arc<Torrent>) {
     let mut current_size: i32 = 0;
 
     socket.write_all(&build_handshake(torrent)).await.unwrap();
-    status.last_piece = Instant::now();
+    peer.last_piece = Instant::now();
 
     
     loop {
-        let stream_result = match socket.read(&mut temp_buffer).await {
-            Ok(n) if n == 0 => return exit_socket(&mut socket, status),
-            Ok(n) => n,
-            Err(_) => {
-                return exit_socket(&mut socket, status);
+        tokio::select! {
+            stream = socket.read(&mut temp_buffer) => {
+                let size: i32 = match stream {
+                    Ok(n) if n == 0 => return exit_socket(&mut socket, peer),
+                    Ok(n) => n,
+                    Err(_) => {
+                        return exit_socket(&mut socket, peer);
+                    }
+                }.try_into().unwrap();
+
+                buffer.extend_from_slice(&temp_buffer[..size.try_into().unwrap()]);
+                current_size += size;
+
+                while current_size > 0 { 
+                    if peer.last_piece.elapsed().as_secs() > 10 {
+                        return exit_socket(&mut socket, peer);
+                    }
+                    if let Some(packet_size) = get_packet_size(&buffer) {
+                        let packet_size_i32: i32 = packet_size.try_into().unwrap();
+                        if current_size < packet_size_i32 {
+                            break;
+                        }
+
+                        if !on_socket(&buffer[0..packet_size], &mut socket, peer, torrent).await { 
+                            return exit_socket(&mut socket, peer);
+                        };
+                        
+                        buffer.drain(0..packet_size);
+                        current_size -= packet_size_i32;
+                        continue;
+                    }
+
+                    return exit_socket(&mut socket, peer);
+                }
+            },
+
+            status = peer.status_receiver.recv() => {
+                if let Ok(status) = status {
+                    peer.status = status;
+                    match peer.status {
+                        Status::Closing => return exit_socket(&mut socket, peer),
+                        Status::Leeching => todo!(),
+                        Status::Seeding => todo!(),
+                        Status::Peering => todo!(),
+                        Status::Halted => todo!(),
+                    }
+                }
+                
             }
-        };
-        let size: i32 = stream_result.try_into().unwrap();
-
-        buffer.extend_from_slice(&temp_buffer[..size.try_into().unwrap()]);
-        current_size += size;
-
-        while current_size > 0 {
-            
-            if status.last_piece.elapsed().as_secs() > 10 {
-                return exit_socket(&mut socket, status);
-            }
-
-            let packet_size = get_packet_size(&buffer);
-            if packet_size.is_none() {
-                return exit_socket(&mut socket, status);
-            }
-            let packet_size = packet_size.unwrap();
-
-            let packet_size_i32: i32 = packet_size.try_into().unwrap();
-            if current_size < packet_size_i32 {
-                break;
-            }
-
-            if !on_socket(&buffer[0..packet_size], &mut socket, status, torrent).await { 
-                return exit_socket(&mut socket, status);
-            };
-            
-            buffer.drain(0..packet_size);
-            current_size -= packet_size_i32;
         }
-
     }
 }
 
@@ -192,7 +219,7 @@ async fn piece_handler(socket: &mut TcpStream, status: &mut Peer, torrent: &Arc<
         };
         
         if is_correct(&piece_write, torrent) {
-            if status.sender.send(piece_write).await.is_err() {
+            if status.piece_sender.send(piece_write).await.is_err() {
                 return false
             }
         } else {
@@ -208,12 +235,8 @@ async fn piece_handler(socket: &mut TcpStream, status: &mut Peer, torrent: &Arc<
         if !status.choked {
             request_piece(socket, status, torrent).await;
         }
-        
-
-        
     }
     true
-    
 }
 
 async fn request_piece(socket: &mut TcpStream, status: &mut Peer, torrent: &Arc<Torrent>) {
