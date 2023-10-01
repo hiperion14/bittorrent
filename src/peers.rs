@@ -1,7 +1,7 @@
 use std::{sync::{Arc, Mutex}, collections::HashSet};
 use tokio::sync::{mpsc::channel, broadcast};
 
-use crate::{worker::PieceQueue, tracker::get_peers, torrent_parser::Torrent, file::TorrentFiles, download::{connect, Peer, Status}, piece::PieceWrite, Address};
+use crate::{worker::PieceQueue, tracker::get_peers, torrent_parser::Torrent, file::TorrentFiles, download::{Peer, Status}, piece::PieceWrite, Address};
 
 
 pub struct Download {
@@ -46,8 +46,8 @@ impl Download {
                         let rx = rx.resubscribe();
 
                         tokio::spawn(async move {
-                            let mut status = Peer::new(work_queue, result_sender, rx, Status::Leeching);
-                            connect(peer, &mut status, &torrent).await
+                            let mut status = Peer::new(peer, work_queue, result_sender, rx, Status::Leeching, torrent);
+                            status.connect().await
                         });
                     }
                 }
