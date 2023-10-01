@@ -1,12 +1,14 @@
 use tokio::{net::TcpStream, io::AsyncWriteExt};
 
-use crate::{torrent_parser::Torrent, message::build_request};
+use crate::{torrent_parser::Torrent, message::builders};
 
 pub struct Piece {
     pub piece_index: i32,
+    pub frequency: usize,
     pub blocks: Option<Vec<Vec<u8>>>,
-    blocks_requested: Vec<bool>,
     pub length: usize,
+    
+    blocks_requested: Vec<bool>,
     completed: usize,
     requested: usize,
 }
@@ -18,14 +20,15 @@ pub struct PieceWrite {
 
 
 impl Piece {
-    pub fn new(piece_index: i32, torrent: &Torrent) -> Self {
+    pub fn new(piece_index: i32, frequency: usize, torrent: &Torrent) -> Self {
         Self {
             length: torrent.blocks_per_piece(piece_index) as usize,
             completed: 0,
             requested: 0,
             piece_index,
             blocks: None,
-            blocks_requested: vec![false; torrent.blocks_per_piece(piece_index) as usize]
+            blocks_requested: vec![false; torrent.blocks_per_piece(piece_index) as usize],
+            frequency
         }
     }
 
@@ -55,7 +58,7 @@ impl Piece {
 
     pub async fn request(&mut self, socket: &mut TcpStream, torrent: &Torrent) -> bool {
         if let Some(block_index) = self.get_needed(torrent) {
-            let _ = socket.write_all(&build_request(
+            let _ = socket.write_all(&builders::build_request(
                 self.piece_index, 
                 (block_index * 16384).try_into().unwrap(),
                 torrent.block_len(self.piece_index, block_index.try_into().unwrap()).try_into().unwrap(),

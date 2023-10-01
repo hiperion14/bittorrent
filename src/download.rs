@@ -1,10 +1,8 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc, time::Instant};
 use sha1::{Sha1, Digest};
-use tokio::sync::mpsc::Sender;
-use tokio::sync::broadcast::Receiver;
-use std::time::Instant;
+use tokio::sync::{mpsc::Sender, broadcast::Receiver};
 use tokio::{net::TcpStream, io::{AsyncWriteExt, AsyncReadExt}};
-use crate::{message::{build_interested, parse, build_handshake, BitfieldMessage, PieceMessage}, torrent_parser::Torrent, worker::PieceQueue, piece::{Piece, PieceWrite}, Address};
+use crate::{message::{builders, parse, BitfieldMessage, PieceMessage}, torrent_parser::Torrent, queue::PieceQueue, piece::{Piece, PieceWrite}, Address};
 
 #[derive(Debug, Clone)]
 pub enum Status {
@@ -18,7 +16,6 @@ pub enum Status {
 pub struct Peer {
     worker: Arc<PieceQueue>,
     piece: Option<Piece>,
-    frequency: Option<usize>,
     choked: bool,
     last_piece: Instant,
     bitfield: Vec<bool>,
@@ -36,7 +33,6 @@ impl Peer {
             choked: false,
             bitfield: Vec::new(),
             piece: None,
-            frequency: None,
             last_piece: Instant::now(),
             piece_sender,
             status_receiver,
@@ -53,19 +49,19 @@ impl Peer {
 
     fn exit(&mut self) {
         if self.piece.is_some() {
-            self.worker.push(self.piece.as_ref().unwrap().piece_index as usize, self.frequency.unwrap())
+            self.worker.push(self.piece.as_ref().unwrap().piece_index as usize, self.piece.as_ref().unwrap().frequency)
         }
     }
 
     async fn on_socket(&mut self, msg: &[u8], socket: &mut TcpStream) -> bool {
         if is_handshake(msg) {
-            let _ = socket.write_all(&build_interested()).await;
+            let _ = socket.write_all(&builders::build_interested()).await;
         } else {
             let m = match parse(msg) {
                 Some(a) => a,
                 None => return false
             };
-
+            
             match m.id {
                 0 => self.choke_handler(),
                 1 => self.unchoke_handler(socket).await,
@@ -95,14 +91,14 @@ impl Peer {
                 return self.exit();
             }
         };
-    
+        
         let mut buffer: Vec<u8> = Vec::new();
         let mut temp_buffer: [u8; 65536] = [0; 65536];
         let mut current_size: i32 = 0;
-    
-        socket.write_all(&build_handshake(&self.torrent)).await.unwrap();
+        
+        socket.write_all(&builders::build_handshake(&self.torrent)).await.unwrap();
         self.last_piece = Instant::now();
-    
+        
         
         loop {
             tokio::select! {
@@ -110,14 +106,12 @@ impl Peer {
                     let size: i32 = match stream {
                         Ok(n) if n == 0 => return self.exit_socket(&mut socket),
                         Ok(n) => n,
-                        Err(_) => {
-                            return self.exit_socket(&mut socket);
-                        }
+                        Err(_) => return self.exit_socket(&mut socket)
                     }.try_into().unwrap();
-    
+                    
                     buffer.extend_from_slice(&temp_buffer[..size.try_into().unwrap()]);
                     current_size += size;
-    
+                    
                     while current_size > 0 { 
                         if self.last_piece.elapsed().as_secs() > 10 {
                             return self.exit_socket(&mut socket);
@@ -127,7 +121,7 @@ impl Peer {
                             if current_size < packet_size_i32 {
                                 break;
                             }
-    
+                            
                             if !self.on_socket(&buffer[0..packet_size], &mut socket).await { 
                                 return self.exit_socket(&mut socket);
                             };
@@ -136,7 +130,7 @@ impl Peer {
                             current_size -= packet_size_i32;
                             continue;
                         }
-    
+                        
                         return self.exit_socket(&mut socket);
                     }
                 },
@@ -160,13 +154,9 @@ impl Peer {
     }
 
     fn pop_piece(&mut self) -> bool {
-        if let Some((piece, freq)) = self.worker.pop(&is_available, &self.bitfield) {
-            self.piece = Some(Piece::new(piece as i32, &self.torrent));
-            self.frequency = Some(freq);
-            return true
-        }
-
-        false
+        let (piece, freq) = self.worker.pop(&is_available, &self.bitfield);
+        self.piece = Some(Piece::new(piece as i32, freq, &self.torrent));
+        true
     }
 
     fn bitfield_handler(&mut self, bitfield_message: &BitfieldMessage) -> bool {
@@ -182,12 +172,13 @@ impl Peer {
     }
 
     async fn piece_handler(&mut self, socket: &mut TcpStream, piece_resp: &PieceMessage) -> bool {
-        let completed = self.piece.as_mut().unwrap().add_block((piece_resp.block_begin/16384) as usize, piece_resp.block.clone());
+        let piece = self.piece.as_mut().unwrap();
+        let completed = piece.add_block((piece_resp.block_begin/16384) as usize, piece_resp.block.clone());
         
         if completed {
             let piece_write = PieceWrite {
-                data: self.piece.as_ref().unwrap().blocks.as_ref().unwrap().iter().flat_map(|a| a.clone()).collect(),
-                piece_index: self.piece.as_ref().unwrap().piece_index as usize,
+                data: piece.blocks.as_ref().unwrap().iter().flat_map(|a| a.clone()).collect(),
+                piece_index: piece.piece_index as usize,
             };
             
             if is_correct(&piece_write, &self.torrent) {
@@ -195,20 +186,18 @@ impl Peer {
                     return false
                 }
             } else {
-                self.worker.push(self.piece.as_ref().unwrap().piece_index as usize, self.frequency.unwrap());
-            }
+                self.worker.push(piece.piece_index as usize, piece.frequency);
+                if !self.pop_piece() {
+                    return false
+                }
+
+                self.last_piece = Instant::now();
     
-            if !self.pop_piece() {
-                return false
-            }
-    
-            self.last_piece = Instant::now();
-    
-            if !self.choked {
-                self.request_piece(socket).await;
+                if !self.choked {
+                    self.request_piece(socket).await;
+                }
             }
         }
-
         true
     }
 

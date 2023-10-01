@@ -7,8 +7,8 @@ use tokio::net::UdpSocket;
 
 #[derive(Debug)]
 struct Resp {
-    action: u32,
-    transaction_id: u32,
+    _action: u32,
+    _transaction_id: u32,
     connection_id: u64
 }
 
@@ -54,8 +54,8 @@ impl Announce {
 impl Resp {
     pub fn from_buff(buf: &[u8]) -> Resp {
         Resp {
-            action: u32::from_be_bytes(buf[0..4].try_into().unwrap()),
-            transaction_id: u32::from_be_bytes(buf[4..8].try_into().unwrap()),
+            _action: u32::from_be_bytes(buf[0..4].try_into().unwrap()),
+            _transaction_id: u32::from_be_bytes(buf[4..8].try_into().unwrap()),
             connection_id: u64::from_be_bytes(buf[8..16].try_into().unwrap()),
         }
     }

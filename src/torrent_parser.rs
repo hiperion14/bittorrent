@@ -10,9 +10,6 @@ pub struct Torrent {
     pub hashes: Vec<Vec<u8>>
 }
 
-
-
-
 impl Torrent {
     pub fn new(torrent: &Bee) -> Torrent {
         Torrent {
@@ -55,8 +52,6 @@ impl Torrent {
     }
 }
 
-
-
 pub fn size(torrent: &Bee) -> i128 {
     let dict = torrent["info"].get_dict().unwrap();
     if dict.contains_key("length") {
@@ -66,4 +61,3 @@ pub fn size(torrent: &Bee) -> i128 {
     let test = binding.iter().map(|a| a["length"].get_int().unwrap()).reduce(|a, b| a + b).unwrap();
     test
 }
-

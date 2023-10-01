@@ -1,7 +1,7 @@
 use std::{sync::{Arc, Mutex}, collections::HashSet};
 use tokio::sync::{mpsc::channel, broadcast};
 
-use crate::{worker::PieceQueue, tracker::get_peers, torrent_parser::Torrent, file::TorrentFiles, download::{Peer, Status}, piece::PieceWrite, Address};
+use crate::{queue::PieceQueue, tracker::get_peers, torrent_parser::Torrent, file::TorrentFiles, download::{Peer, Status}, piece::PieceWrite, Address};
 
 
 pub struct Download {
@@ -69,7 +69,6 @@ impl Download {
     
             if completed == self.torrent.num_pieces {
                 println!("Finished");
-                self.work_queue.close();
                 tx.send(Status::Closing).unwrap();
             }
         }

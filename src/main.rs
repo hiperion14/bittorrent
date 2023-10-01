@@ -6,7 +6,7 @@ mod torrent_parser;
 mod download;
 mod file;
 mod message;
-mod worker;
+mod queue;
 mod piece;
 mod peers;
 use bencode::Bee;
